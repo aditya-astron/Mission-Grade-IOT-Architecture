@@ -1,0 +1,191 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+// ---------- Wi-Fi + MQTT Config ----------
+const char* ssid       = "G403C-6A2A";     // 🔹 primary Wi-Fi
+const char* password   = "fkfye76847";       // 🔹 primary Wi-Fi password
+
+// 🔹 fallback Wi-Fi 
+const char* ssid2      = "CPPLUS-1CF1";
+const char* password2  = "CpxrDE21S";
+
+// 🔹 Google Cloud VM External IP (Mosquitto broker)
+const char* mqtt_server = "34.93.156.23";
+
+// Device identity
+#define DEVICE_ID "external1"
+
+// ---------- MQTT ----------
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// ---------- Sensor pins ----------
+#define DHTPIN  4       // DHT11 data pin
+#define DHTTYPE DHT11   // DHT11 sensor type
+#define SDA_PIN 21      // ESP32 I2C SDA
+#define SCL_PIN 22      // ESP32 I2C SCL
+#define SEALEVELPRESSURE_HPA (1013.25)
+
+// ---------- Sensor objects ----------
+Adafruit_BMP280 bmp;
+DHT dht(DHTPIN, DHTTYPE);
+
+bool useBMP = false;
+
+// ---------- Wi-Fi Setup ----------
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+
+  // Try primary first
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 12000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  // If primary fails, try fallback
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n❌ Primary WiFi failed. Trying fallback...");
+
+    WiFi.disconnect(true, true);
+    delay(300);
+
+    Serial.print("Connecting to ");
+    Serial.println(ssid2);
+
+    WiFi.begin(ssid2, password2);
+
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+  }
+
+  Serial.println("\n✅ WiFi connected");
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// ---------- MQTT Reconnect ----------
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (client.connect(DEVICE_ID)) {
+      Serial.println("✅ connected to broker");
+    } else {
+      Serial.print("❌ failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5s");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+
+  Serial.println("=== BMP280 + DHT11 Weather Station ===");
+
+  // --- I2C setup
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  Serial.println("🔍 Scanning I2C bus...");
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("✅ Found device at 0x%02X\n", addr);
+      delay(5);
+    }
+  }
+  Serial.println("🔍 Scan complete.\n");
+
+  // --- BMP280 Setup
+  if (bmp.begin(0x76) || bmp.begin(0x77)) {
+    Serial.println("✅ BMP280 detected and initialized");
+    useBMP = true;
+  } else {
+    Serial.println("❌ Could not find a valid BMP280 sensor!");
+  }
+
+  // --- DHT11 Setup
+  dht.begin();
+  Serial.println("✅ DHT11 initialized on GPIO4");
+
+  Serial.println("🌦 Weather monitoring started...\n");
+  delay(1000);
+}
+
+void loop() {
+  // If WiFi drops, reconnect (tries primary then fallback)
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️ WiFi disconnected. Reconnecting...");
+    setup_wifi();
+  }
+
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  // --- DHT11 Reading
+  float h = dht.readHumidity();
+  float t_dht = dht.readTemperature();
+
+  // --- BMP280 Reading
+  float t_bmp = NAN, pressure = NAN, altitude = NAN;
+  if (useBMP) {
+    t_bmp = bmp.readTemperature();
+    pressure = bmp.readPressure() / 100.0F;
+    altitude = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+  }
+
+  // --- Debug print
+  Serial.println("=== Weather Station Readings ===");
+  if (!isnan(h) && !isnan(t_dht)) {
+    Serial.printf("🌡 DHT11 Temp: %.1f °C | 💧 Humidity: %.1f %%\n", t_dht, h);
+  } else {
+    Serial.println("❌ Failed to read DHT11");
+  }
+  if (useBMP) {
+    Serial.printf("🌡 BMP280 Temp: %.2f °C | 🌪 Pressure: %.2f hPa | 🏔 Alt: %.2f m\n",
+                  t_bmp, pressure, altitude);
+  }
+  Serial.println("================================\n");
+
+  // --- Build JSON payload
+  char payload[256];
+  snprintf(payload, sizeof(payload),
+    "{\"device\":\"%s\",\"temp_dht11\":%.1f,\"hum_dht11\":%.1f,"
+    "\"temp_bmp280\":%.2f,\"pressure\":%.2f,\"altitude\":%.2f}",
+    DEVICE_ID,
+    isnan(t_dht) ? 0.0 : t_dht,
+    isnan(h) ? 0.0 : h,
+    isnan(t_bmp) ? 0.0 : t_bmp,
+    isnan(pressure) ? 0.0 : pressure,
+    isnan(altitude) ? 0.0 : altitude
+  );
+
+  // --- Publish to MQTT
+  client.publish("hab/external1", payload);
+  Serial.print("📤 Published: ");
+  Serial.println(payload);
+
+  delay(3000); // DHT11 needs >2s between reads
+}
