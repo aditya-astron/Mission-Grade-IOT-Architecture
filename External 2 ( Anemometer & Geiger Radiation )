@@ -1,0 +1,215 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// ---------- Wi-Fi + MQTT Config ----------
+const char* ssid       = "G403C-6A2A";     // 🔹 primary Wi-Fi
+const char* password   = "fkfye76847";       // 🔹 primary Wi-Fi password
+
+// 🔹 fallback Wi-Fi 
+const char* ssid2      = "CPPLUS-1CF1";
+const char* password2  = "CpxrDE21S";
+
+// 🔹 Google Cloud VM External IP (Mosquitto broker)
+const char* mqtt_server = "34.93.156.23";
+
+// Device identity
+#define DEVICE_ID "external2"
+
+// ---------- MQTT ----------
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Pin definitions
+#define ANEMOMETER_PIN 34      // GPIO34 for anemometer (analog) ✅ WORKING
+#define GEIGER_PIN 13          // GPIO13 for Geiger counter ⚡ CORRECTED
+#define LED_PIN 25             // Activity LED
+#define BUZZER_PIN 26          // Buzzer for radiation alerts
+
+// Anemometer constants
+const float minVoltage = 0.033;
+const float maxVoltage = 3.3;
+const float maxWindSpeed = 32.4;
+const float mps_to_kmh = 3.6;
+const float mps_to_mph = 2.23694;
+
+// Geiger counter variables
+volatile unsigned long totalCounts = 0;
+unsigned long cpmTime = 0;
+unsigned long CPM = 0;
+float radiationLevel = 0;
+const float conversionFactor = 0.0057;
+
+// Interrupt service routine
+ICACHE_RAM_ATTR void GetEvent() {
+  totalCounts++;
+}
+
+// ---------- Wi-Fi Setup ----------
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+
+  // Try primary first
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 12000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  // If primary fails, try fallback
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n❌ Primary WiFi failed. Trying fallback...");
+
+    WiFi.disconnect(true, true);
+    delay(300);
+
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(ssid2);
+
+    WiFi.begin(ssid2, password2);
+
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+  }
+
+  Serial.println("\n✅ WiFi connected");
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// ---------- MQTT Reconnect ----------
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (client.connect(DEVICE_ID)) {
+      Serial.println("✅ connected to broker");
+    } else {
+      Serial.print("❌ failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5s");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+
+  Serial.println("============================================");
+  Serial.println("   ESP32 COMBINED WEATHER & RADIATION      ");
+  Serial.println("============================================");
+  Serial.println("🌪  Anemometer: GPIO34 (Analog) ✅");
+  Serial.println("☢️  Geiger Counter: GPIO13 ⚡ EXPERT CODE!");
+  Serial.println("============================================");
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(GEIGER_PIN, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(GEIGER_PIN), GetEvent, RISING);
+
+  Serial.println("✅ GPIO13 configured (EXPERT METHOD)");
+  Serial.println("✅ GPIO34 configured for Anemometer");
+
+  delay(1000);
+  int initialState = digitalRead(GEIGER_PIN);
+  Serial.printf("📍 GPIO13 initial state: %s\n", initialState ? "HIGH" : "LOW");
+
+  Serial.println("\n=== EXPERT COMBINED MONITORING ===");
+  Serial.println("Time(s) | Wind(m/s) | Wind(km/h) | Total Pulses | CPM | Radiation(µSv/h)");
+  Serial.println("--------|-----------|------------|--------------|-----|------------------");
+
+  cpmTime = millis();
+}
+
+void loop() {
+  // If WiFi drops, reconnect (tries primary then fallback)
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️ WiFi disconnected. Reconnecting...");
+    setup_wifi();
+  }
+
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  unsigned long currentMillis = millis();
+
+  // --- Anemometer (3s cycle)
+  static unsigned long lastAnemometer = 0;
+  static float windSpeed_mps = 0, windSpeed_kmh = 0;
+
+  if (currentMillis - lastAnemometer >= 3000) {
+    int adcValue = analogRead(ANEMOMETER_PIN);
+    float voltage = (adcValue / 4095.0) * 3.3;
+    windSpeed_mps = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * maxWindSpeed;
+    windSpeed_kmh = windSpeed_mps * mps_to_kmh;
+
+    if (windSpeed_mps < 0) windSpeed_mps = 0;
+    if (windSpeed_kmh < 0) windSpeed_kmh = 0;
+
+    lastAnemometer = currentMillis;
+  }
+
+  // --- Display & MQTT publish (10s cycle)
+  static unsigned long lastDisplay = 0;
+  if (currentMillis - lastDisplay >= 10000) {
+    float instantCPM = 0;
+    if (currentMillis > 10000) {
+      instantCPM = (totalCounts * 60000.0) / currentMillis;
+    }
+    float instantRad = instantCPM * conversionFactor;
+
+    // Print
+    Serial.printf("%7lu | %9.2f | %10.2f | %12lu | %3.0f | %16.3f\n",
+                  currentMillis/1000, windSpeed_mps, windSpeed_kmh,
+                  totalCounts, instantCPM, instantRad);
+
+    // Build JSON payload
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+      "{\"device\":\"%s\",\"wind_mps\":%.2f,\"wind_kmh\":%.2f,"
+      "\"cpm\":%.0f,\"radiation_uSv\":%.3f}",
+      DEVICE_ID, windSpeed_mps, windSpeed_kmh, instantCPM, instantRad);
+
+    client.publish("hab/external2", payload);
+    Serial.print("📤 Published: ");
+    Serial.println(payload);
+
+    lastDisplay = currentMillis;
+  }
+
+  // --- 60-second cycle
+  if ((currentMillis - cpmTime) >= 60000) {
+    CPM = totalCounts;
+    totalCounts = 0;
+    cpmTime = currentMillis;
+
+    radiationLevel = CPM * conversionFactor;
+
+    Serial.println("\n=== 60 SECOND READING (EXPERT METHOD) ===");
+    Serial.printf("⏱  Time: %.1f minutes\n", currentMillis / 60000.0);
+    Serial.printf("⚡ Radiation Pulses: %lu\n", CPM);
+    Serial.printf("📊 CPM: %lu\n", CPM);
+    Serial.printf("☢️  Radiation: %.3f µSv/h\n", radiationLevel);
+    Serial.printf("🌪  Wind: %.2f m/s (%.2f km/h)\n", windSpeed_mps, windSpeed_kmh);
+    Serial.println("=======================================\n");
+  }
+
+  delay(100);
+}
