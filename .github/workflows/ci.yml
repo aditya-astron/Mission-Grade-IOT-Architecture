@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run tests
+        run: make -C tests
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          find firmware tests -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+            | xargs clang-format --dry-run --Werror
+
+  firmware:
+    name: PlatformIO firmware compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+      - name: Compile node images
+        working-directory: firmware
+        run: |
+          pio run -e external_weather
+          pio run -e external_radiation
+          pio run -e internal_air
+          pio run -e internal_imu
+          pio run -e internal_co2

@@ -1,0 +1,26 @@
+# Build
+.pio/
+firmware/.pio/
+tests/host_tests
+*.o
+*.elf
+*.bin
+*.map
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets — never commit live credentials
+secrets.h
+firmware/include/habitat/secrets.h
+.env
+.env.*
+!/.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
