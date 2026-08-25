@@ -1,0 +1,15 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// ---------- Wi-Fi Config ----------
+#define WIFI_SSID               "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD           "YOUR_WIFI_PASSWORD"
+
+// Fallback Wi-Fi
+#define WIFI_SSID_FALLBACK      "YOUR_FALLBACK_WIFI_SSID"
+#define WIFI_PASSWORD_FALLBACK  "YOUR_FALLBACK_WIFI_PASSWORD"
+
+// ---------- MQTT Config ----------
+#define MQTT_SERVER             "YOUR_MQTT_BROKER_IP"
+
+#endif

@@ -1,3 +1,4 @@
+#include "config.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
@@ -7,15 +8,15 @@
 #include <DHT_U.h>
 
 // ---------- Wi-Fi + MQTT Config ----------
-const char* ssid       = "G403C-6A2A";     // 🔹 primary Wi-Fi
-const char* password   = "fkfye76847";       // 🔹 primary Wi-Fi password
+const char* ssid       = WIFI_SSID;     // 🔹 primary Wi-Fi
+const char* password   = WIFI_PASSWORD;       // 🔹 primary Wi-Fi password
 
 // 🔹 fallback Wi-Fi 
-const char* ssid2      = "CPPLUS-1CF1";
-const char* password2  = "CpxrDE21S";
+const char* ssid2      = WIFI_SSID_FALLBACK;
+const char* password2  = WIFI_PASSWORD_FALLBACK;
 
 // 🔹 Google Cloud VM External IP (Mosquitto broker)
-const char* mqtt_server = "34.93.156.23";
+const char* mqtt_server = MQTT_SERVER;
 
 // Device identity
 #define DEVICE_ID "internal1b"

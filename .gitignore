@@ -1,0 +1,16 @@
+# PlatformIO / Arduino IDE output
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+build/
+
+# Local configuration files containing credentials
+config.h
+src/*/config.h
+
+# OS generated files
+.DS_Store
+*.swp
+*.swo

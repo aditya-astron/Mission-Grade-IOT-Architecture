@@ -1,40 +1,37 @@
+#include "config.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
-#include <DHT.h>
-#include <DHT_U.h>
 
 // ---------- Wi-Fi + MQTT Config ----------
-const char* ssid       = "G403C-6A2A";     // 🔹 primary Wi-Fi
-const char* password   = "fkfye76847";       // 🔹 primary Wi-Fi password
+const char* ssid       = WIFI_SSID;     // 🔹 primary Wi-Fi
+const char* password   = WIFI_PASSWORD;       // 🔹 primary Wi-Fi password
 
 // 🔹 fallback Wi-Fi 
-const char* ssid2      = "CPPLUS-1CF1";
-const char* password2  = "CpxrDE21S";
+const char* ssid2      = WIFI_SSID_FALLBACK;
+const char* password2  = WIFI_PASSWORD_FALLBACK;
 
 // 🔹 Google Cloud VM External IP (Mosquitto broker)
-const char* mqtt_server = "34.93.156.23";
+const char* mqtt_server = MQTT_SERVER;
 
 // Device identity
-#define DEVICE_ID "external1"
+#define DEVICE_ID "internal2"
 
 // ---------- MQTT ----------
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 // ---------- Sensor pins ----------
-#define DHTPIN  4       // DHT11 data pin
-#define DHTTYPE DHT11   // DHT11 sensor type
-#define SDA_PIN 21      // ESP32 I2C SDA
-#define SCL_PIN 22      // ESP32 I2C SCL
+#define MQ9_AO   32
+#define MQ135_AO 33
+#define SDA_PIN  21
+#define SCL_PIN  22
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 // ---------- Sensor objects ----------
-Adafruit_BMP280 bmp;
-DHT dht(DHTPIN, DHTTYPE);
-
+Adafruit_BMP280 bmp; // I2C
 bool useBMP = false;
 
 // ---------- Wi-Fi Setup ----------
@@ -101,8 +98,6 @@ void setup() {
   setup_wifi();
   client.setServer(mqtt_server, 1883);
 
-  Serial.println("=== BMP280 + DHT11 Weather Station ===");
-
   // --- I2C setup
   Wire.begin(SDA_PIN, SCL_PIN);
 
@@ -124,11 +119,6 @@ void setup() {
     Serial.println("❌ Could not find a valid BMP280 sensor!");
   }
 
-  // --- DHT11 Setup
-  dht.begin();
-  Serial.println("✅ DHT11 initialized on GPIO4");
-
-  Serial.println("🌦 Weather monitoring started...\n");
   delay(1000);
 }
 
@@ -144,48 +134,53 @@ void loop() {
   }
   client.loop();
 
-  // --- DHT11 Reading
-  float h = dht.readHumidity();
-  float t_dht = dht.readTemperature();
+  // --- MQ-9 Reading
+  int mq9Value = analogRead(MQ9_AO);
+  String mq9_status = "Safe";
+  if (mq9Value > 2200) mq9_status = "LPG High";
+  else if (mq9Value > 1200) mq9_status = "LPG Moderate";
+  if (mq9Value > 2800) mq9_status += " | CO Dangerous";
+  else if (mq9Value > 1600) mq9_status += " | CO Elevated";
+
+  // --- MQ-135 Reading
+  int mq135Value = analogRead(MQ135_AO);
 
   // --- BMP280 Reading
-  float t_bmp = NAN, pressure = NAN, altitude = NAN;
+  float bmp_temp = NAN, bmp_press = NAN, bmp_alt = NAN;
   if (useBMP) {
-    t_bmp = bmp.readTemperature();
-    pressure = bmp.readPressure() / 100.0F;
-    altitude = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+    bmp_temp = bmp.readTemperature();
+    bmp_press = bmp.readPressure() / 100.0F;
+    bmp_alt = bmp.readAltitude(SEALEVELPRESSURE_HPA);
   }
 
-  // --- Debug print
-  Serial.println("=== Weather Station Readings ===");
-  if (!isnan(h) && !isnan(t_dht)) {
-    Serial.printf("🌡 DHT11 Temp: %.1f °C | 💧 Humidity: %.1f %%\n", t_dht, h);
-  } else {
-    Serial.println("❌ Failed to read DHT11");
-  }
+  // --- Debug to Serial
+  Serial.println("===== MQ-9 Gas Sensor =====");
+  Serial.printf("Analog: %d | Status: %s\n", mq9Value, mq9_status.c_str());
+  Serial.printf("===== MQ-135 Air Quality: %d =====\n", mq135Value);
   if (useBMP) {
-    Serial.printf("🌡 BMP280 Temp: %.2f °C | 🌪 Pressure: %.2f hPa | 🏔 Alt: %.2f m\n",
-                  t_bmp, pressure, altitude);
+    Serial.printf("BMP280 Temp: %.2f °C\n", bmp_temp);
+    Serial.printf("BMP280 Pressure: %.2f hPa\n", bmp_press);
+    Serial.printf("BMP280 Altitude: %.2f m\n", bmp_alt);
   }
-  Serial.println("================================\n");
 
   // --- Build JSON payload
   char payload[256];
   snprintf(payload, sizeof(payload),
-    "{\"device\":\"%s\",\"temp_dht11\":%.1f,\"hum_dht11\":%.1f,"
-    "\"temp_bmp280\":%.2f,\"pressure\":%.2f,\"altitude\":%.2f}",
+    "{\"device\":\"%s\",\"mq9\":%d,\"mq9_status\":\"%s\",\"mq135\":%d,"
+    "\"bmp_temp\":%.2f,\"bmp_press\":%.2f,\"bmp_alt\":%.2f}",
     DEVICE_ID,
-    isnan(t_dht) ? 0.0 : t_dht,
-    isnan(h) ? 0.0 : h,
-    isnan(t_bmp) ? 0.0 : t_bmp,
-    isnan(pressure) ? 0.0 : pressure,
-    isnan(altitude) ? 0.0 : altitude
+    mq9Value,
+    mq9_status.c_str(),
+    mq135Value,
+    isnan(bmp_temp) ? 0.0 : bmp_temp,
+    isnan(bmp_press) ? 0.0 : bmp_press,
+    isnan(bmp_alt) ? 0.0 : bmp_alt
   );
 
   // --- Publish to MQTT
-  client.publish("hab/external1", payload);
+  client.publish("hab/internal2", payload);
   Serial.print("📤 Published: ");
   Serial.println(payload);
 
-  delay(3000); // DHT11 needs >2s between reads
+  delay(2000); // cycle
 }

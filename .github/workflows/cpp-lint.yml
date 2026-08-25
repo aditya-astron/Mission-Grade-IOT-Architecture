@@ -1,0 +1,21 @@
+name: C++ Linting
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Run clang-format check
+      uses: DoDoneDid/clang-format-lint-action@v2.0.0
+      with:
+        source: './src'
+        extensions: 'ino,cpp,h'
+        clangFormatVersion: 15
+        style: 'file'
